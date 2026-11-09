@@ -5,3 +5,4 @@ dist/
 *.dmg
 *.zip
 assets/unused/
+windows/build/

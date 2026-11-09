@@ -1,0 +1,14 @@
+#pragma once
+
+#define IDI_APP 1
+
+#define IDR_SOUND_THOCK 101
+#define IDR_SOUND_CLICK 102
+#define IDR_SOUND_POP 103
+#define IDR_SOUND_WOOD 104
+#define IDR_SOUND_BOOP 105
+#define IDR_SOUND_SQUEAK 106
+
+#define IDR_TRAY_ON 201
+#define IDR_TRAY_OFF 202
+#define IDR_APP_PNG 203

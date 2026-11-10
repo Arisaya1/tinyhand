@@ -33,7 +33,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - name: Build production, updater and shape tests
         shell: pwsh
-        run: C:\msys64\usr\bin\bash.exe -lc 'export PATH=/mingw64/bin:/usr/bin:$PATH; cd "$(cygpath -u "$GITHUB_WORKSPACE")"; make -C windows CROSS= -j4 all test'
+        run: C:\msys64\usr\bin\bash.exe -lc 'pacman -S --noconfirm --needed mingw-w64-x86_64-gcc make; export PATH=/mingw64/bin:/usr/bin:$PATH; cd "$(cygpath -u "$GITHUB_WORKSPACE")"; make -C windows CROSS= -j4 all test'
       - name: Run shape tests
         run: windows/build/shape_test.exe
       - name: Check production release hygiene
@@ -55,7 +55,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - name: Build release executables
         shell: pwsh
-        run: C:\msys64\usr\bin\bash.exe -lc 'export PATH=/mingw64/bin:/usr/bin:$PATH; cd "$(cygpath -u "$GITHUB_WORKSPACE")"; make -C windows CROSS= -j4 all'
+        run: C:\msys64\usr\bin\bash.exe -lc 'pacman -S --noconfirm --needed mingw-w64-x86_64-gcc make; export PATH=/mingw64/bin:/usr/bin:$PATH; cd "$(cygpath -u "$GITHUB_WORKSPACE")"; make -C windows CROSS= -j4 all'
       - name: Package and sign release
         shell: pwsh
         env:

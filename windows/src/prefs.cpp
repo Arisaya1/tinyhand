@@ -1,4 +1,5 @@
 #include "prefs.h"
+#include "custom_hands.h"
 
 const std::vector<StyleInfo> kStyles = {
     {L"lavender", L"Lavender toy", kInkPurple},
@@ -70,11 +71,25 @@ const StyleInfo *style_info(const std::wstring &id) {
 }
 
 std::wstring style_title(const std::wstring &id) {
+    if (custom_hands::valid_id(id)) {
+        for (const auto &hand : custom_hands::all()) {
+            if (hand.id == id) {
+                return hand.name;
+            }
+        }
+    }
     const StyleInfo *s = style_info(id);
     return s ? s->title : id;
 }
 
 uint32_t style_ink(const std::wstring &id) {
+    if (custom_hands::valid_id(id)) {
+        for (const auto &hand : custom_hands::all()) {
+            if (hand.id == id) {
+                return hand.ink;
+            }
+        }
+    }
     const StyleInfo *s = style_info(id);
     return s ? s->ink : kInkPurple;
 }
@@ -201,7 +216,8 @@ static std::vector<std::wstring> split(const std::wstring &s) {
     while (start <= s.size()) {
         size_t comma = s.find(L',', start);
         std::wstring part = s.substr(start, comma == std::wstring::npos ? std::wstring::npos : comma - start);
-        if (!part.empty() && style_info(part) && std::find(out.begin(), out.end(), part) == out.end()) {
+        if (!part.empty() && (style_info(part) || custom_hands::valid_id(part)) &&
+            std::find(out.begin(), out.end(), part) == out.end()) {
             out.push_back(part);
         }
         if (comma == std::wstring::npos) {
@@ -247,7 +263,7 @@ void load() {
         return;
     }
     std::wstring style = read_string(k, L"pointerStyle", g.pointerStyle);
-    g.pointerStyle = style_info(style) ? style : L"lavender";
+    g.pointerStyle = (style_info(style) || custom_hands::valid_id(style)) ? style : L"lavender";
     g.pointerSize = std::clamp(read_dword(k, L"pointerSize", 130) / 1000.0, kMinSize, kMaxSize);
     g.showShadow = read_dword(k, L"showShadow", 1) != 0;
     g.fadeSeconds = read_dword(k, L"fadeSeconds", 3);
@@ -335,7 +351,7 @@ bool launch_at_login() {
     }
     std::wstring v = read_string(k, L"TinyHand", L"");
     RegCloseKey(k);
-    return !v.empty();
+    return v == L"\"" + th::exe_path() + L"\"";
 }
 
 void set_launch_at_login(bool on) {

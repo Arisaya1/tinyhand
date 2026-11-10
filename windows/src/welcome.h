@@ -21,6 +21,7 @@ private:
 
     HWND hwnd_ = nullptr;
     th::Surface surface_;
+    std::unique_ptr<Gdiplus::Bitmap> icon_;
     float scale_ = 1;
     int hover_ = 0;
     int pressed_ = 0;

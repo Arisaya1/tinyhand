@@ -4,6 +4,7 @@
 #include "settings.h"
 #include "toolbar.h"
 #include "welcome.h"
+#include "update_controller.h"
 
 // The tray icon, its menu and the global shortcuts (AppDelegate.swift).
 class App {
@@ -36,6 +37,7 @@ private:
     bool clearRegistered_ = false;
     bool testing_ = false;
     bool recording_ = false;
+    UpdateController updater_;
 
     Toolbar toolbar_;
     Overlay overlay_;

@@ -9,7 +9,7 @@ constexpr UINT kTrayId = 1;
 constexpr int kToggleHotkey = 1;
 constexpr int kClearHotkey = 2;
 
-enum : UINT { kMenuToggle = 100, kMenuClear, kMenuSound, kMenuSnap, kMenuSettings, kMenuQuit };
+enum : UINT { kMenuToggle = 100, kMenuClear, kMenuSound, kMenuSnap, kMenuSettings, kMenuUpdates, kMenuQuit };
 
 bool light_taskbar() {
     DWORD v = 0, size = sizeof(v);
@@ -67,6 +67,8 @@ bool App::init(HINSTANCE instance, bool testing) {
     }
     overlay_.onActiveChanged = [this] { updateTray(); };
     settings_.applyHotkey = [this](const Hotkey &h, bool isToggle) { return applyHotkey(h, isToggle); };
+    updater_.init(hwnd_);
+    settings_.checkForUpdates = [this] { updater_.check(true); };
     settings_.onRecording = [this](bool recording) {
         recording_ = recording;
         if (recording) {
@@ -89,10 +91,14 @@ bool App::init(HINSTANCE instance, bool testing) {
         prefs::save();
         welcome_.show(instance_);
     }
+    if (!testing_ && updates::automatically_checks()) {
+        updater_.check(false);
+    }
     return true;
 }
 
 void App::shutdown() {
+    updater_.shutdown();
     overlay_.deactivate();
     unregisterHotkeys();
     if (trayAdded_) {
@@ -129,7 +135,11 @@ LRESULT App::proc(UINT msg, WPARAM wp, LPARAM lp) {
     case WM_TH_TRAY:
         switch (LOWORD(lp)) {
         case WM_LBUTTONUP:
-            overlay_.toggle();
+            if (GetAsyncKeyState(VK_CONTROL) & 0x8000) {
+                showMenu();
+            } else {
+                overlay_.toggle();
+            }
             break;
         case WM_RBUTTONUP:
         case WM_CONTEXTMENU:
@@ -141,6 +151,10 @@ LRESULT App::proc(UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     case WM_TH_SHOW_SETTINGS:
         openSettings();
+        return 0;
+    case WM_TH_UPDATE_INSTALL:
+        shutdown();
+        PostQuitMessage(0);
         return 0;
     case WM_HOTKEY:
         if (wp == kToggleHotkey) {
@@ -222,6 +236,7 @@ void App::showMenu() {
     AppendMenuW(menu, MF_STRING | (prefs::get().snapShapes ? MF_CHECKED : 0), kMenuSnap, L"Snap Shapes");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, kMenuSettings, L"Settings...");
+    AppendMenuW(menu, MF_STRING, kMenuUpdates, L"Check for Updates...");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, kMenuQuit, L"Quit TinyHand");
 
@@ -251,6 +266,9 @@ void App::showMenu() {
         break;
     case kMenuSettings:
         openSettings();
+        break;
+    case kMenuUpdates:
+        updater_.check(true);
         break;
     case kMenuQuit:
         shutdown();

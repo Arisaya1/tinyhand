@@ -15,6 +15,7 @@ public:
     std::function<bool(const Hotkey &, bool isToggle)> applyHotkey;
     // True while a shortcut is being recorded, so global hotkeys step aside.
     std::function<void(bool)> onRecording;
+    std::function<void()> checkForUpdates;
 
     void show(HINSTANCE instance, int section = -1);
     // Draws one page offscreen at 1x, for --settings-test.
@@ -122,6 +123,7 @@ private:
     std::unique_ptr<Gdiplus::FontFamily> family_;
     std::unique_ptr<Gdiplus::FontFamily> semibold_;
     std::unique_ptr<Gdiplus::Font> fonts_[FontCount];
+    std::unique_ptr<Gdiplus::Bitmap> appIcon_;
     float fontScale_ = 0;
     bool listening_ = false;
 

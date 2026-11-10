@@ -6,3 +6,4 @@ dist/
 *.zip
 assets/unused/
 windows/build/
+Tests/windows/build/

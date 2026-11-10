@@ -1,0 +1,76 @@
+name: Windows
+
+on:
+  push:
+    branches: [main, windows-port]
+    paths:
+      - 'windows/**'
+      - 'Sources/ShapeKit/**'
+      - 'Tests/**'
+      - 'VERSION'
+      - '.github/workflows/windows.yml'
+  pull_request:
+    paths:
+      - 'windows/**'
+      - 'Sources/ShapeKit/**'
+      - 'Tests/**'
+      - 'VERSION'
+      - '.github/workflows/windows.yml'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release, for example 1.0.3'
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Build production, updater and shape tests
+        shell: pwsh
+        run: C:\msys64\usr\bin\bash.exe -lc 'export PATH=/mingw64/bin:/usr/bin:$PATH; cd "$(cygpath -u "$GITHUB_WORKSPACE")"; make -C windows CROSS= -j4 all test'
+      - name: Run shape tests
+        run: windows/build/shape_test.exe
+      - name: Check production release hygiene
+        run: python3 Tests/windows/release_hygiene.py windows/build/TinyHand.exe
+      - name: Package release ZIP
+        shell: pwsh
+        run: |
+          $v = (Get-Content VERSION -Raw).Trim()
+          python3 windows/scripts/package_zip.py . "windows/dist/TinyHand-$v-windows-x64.zip"
+
+  release:
+    if: github.event_name == 'workflow_dispatch'
+    needs: build
+    runs-on: windows-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Build release executables
+        shell: pwsh
+        run: C:\msys64\usr\bin\bash.exe -lc 'export PATH=/mingw64/bin:/usr/bin:$PATH; cd "$(cygpath -u "$GITHUB_WORKSPACE")"; make -C windows CROSS= -j4 all'
+      - name: Package and sign release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPDATE_PRIVATE_KEY: ${{ secrets.WINDOWS_UPDATE_PRIVATE_KEY }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:UPDATE_PRIVATE_KEY)) { throw 'WINDOWS_UPDATE_PRIVATE_KEY is missing' }
+          $v = (Get-Content VERSION -Raw).Trim()
+          if ($v -ne '${{ inputs.version }}') { throw "VERSION ($v) does not match requested version (${{ inputs.version }})" }
+          python3 windows/scripts/package_zip.py . "windows/dist/TinyHand-$v-windows-x64.zip"
+          $privateKey = Join-Path $env:RUNNER_TEMP 'tinyhand-update-private.pem'
+          Set-Content -Path $privateKey -Value $env:UPDATE_PRIVATE_KEY -NoNewline
+          try {
+            python3 windows/scripts/release_sign.py sign $privateKey $v "windows/dist/TinyHand-$v-windows-x64.zip" windows/dist/windows-update.json
+            gh release create "windows-v$v" "windows/dist/TinyHand-$v-windows-x64.zip" windows/dist/windows-update.json --title "TinyHand $v for Windows" --notes "Native Windows 10/11 x64 build. Unzip and run TinyHand.exe. Updates are signature and hash verified."
+          } finally {
+            Remove-Item $privateKey -ErrorAction SilentlyContinue
+          }

@@ -1,6 +1,7 @@
 #include "hands.h"
 
 #include "prefs.h"
+#include "custom_hands.h"
 
 #include <map>
 
@@ -10,6 +11,9 @@ static std::map<std::wstring, std::shared_ptr<HandAsset>> cache;
 static std::vector<std::wstring> recent;
 static std::map<std::wstring, std::unique_ptr<Gdiplus::Bitmap>> thumbs;
 static SRWLOCK thumbsLock = SRWLOCK_INIT;
+static SRWLOCK workersLock = SRWLOCK_INIT;
+static std::vector<HANDLE> workers;
+static bool stopping = false;
 
 struct SharedLock {
     SharedLock() { AcquireSRWLockExclusive(&thumbsLock); }
@@ -156,7 +160,9 @@ static std::unique_ptr<HandAsset> read(const std::wstring &style) {
     if (style_is_laser(style)) {
         return nullptr;
     }
-    std::wstring path = asset_dir() + L"\\hand_" + style + L".png";
+    std::wstring path = custom_hands::valid_id(style)
+                            ? custom_hands::asset_path(style)
+                            : asset_dir() + L"\\hand_" + style + L".png";
     Gdiplus::Bitmap *image = th::load_png_file(path);
     if (!image) {
         th::log(L"missing hand picture %ls", path.c_str());
@@ -285,11 +291,48 @@ void preload_thumbnails(const std::vector<std::wstring> &styles, HWND notify, UI
     }
     job->notify = notify;
     job->msg = msg;
+    AcquireSRWLockExclusive(&workersLock);
+    if (stopping) {
+        ReleaseSRWLockExclusive(&workersLock);
+        return;
+    }
     HANDLE t = CreateThread(nullptr, 0, preload_thread, job.get(), 0, nullptr);
     if (t) {
+        workers.push_back(t);
         job.release();
-        CloseHandle(t);
     }
+    ReleaseSRWLockExclusive(&workersLock);
+}
+
+void forget(const std::wstring &style) {
+    cache.erase(style);
+    recent.erase(std::remove(recent.begin(), recent.end(), style), recent.end());
+    SharedLock lock;
+    thumbs.erase(style);
+}
+
+void shutdown() {
+    AcquireSRWLockExclusive(&workersLock);
+    stopping = true;
+    std::vector<HANDLE> pending = std::move(workers);
+    workers.clear();
+    ReleaseSRWLockExclusive(&workersLock);
+
+    size_t offset = 0;
+    while (offset < pending.size()) {
+        DWORD count = DWORD(std::min<size_t>(MAXIMUM_WAIT_OBJECTS, pending.size() - offset));
+        WaitForMultipleObjects(count, pending.data() + offset, TRUE, INFINITE);
+        for (DWORD i = 0; i < count; i++) {
+            CloseHandle(pending[offset + i]);
+        }
+        offset += count;
+    }
+    {
+        SharedLock lock;
+        thumbs.clear();
+    }
+    cache.clear();
+    recent.clear();
 }
 
 } // namespace hands

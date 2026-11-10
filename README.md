@@ -3,10 +3,10 @@
 # TinyHand
 
 [![Latest release](https://img.shields.io/github/v/release/nilbuild/tinyhand?display_name=tag&sort=semver&cacheSeconds=3600)](https://github.com/nilbuild/tinyhand/releases/latest)
-[![Platform: macOS](https://img.shields.io/badge/platform-macOS-lightgrey)](https://tinyhand.app)
+[![Platform: macOS | Windows](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-lightgrey)](https://tinyhand.app)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 
-A tiny hand on a stick that points at things on your Mac screen.
+A tiny hand on a stick that points at things on your Mac or Windows screen.
 
 <img src="./.github/banner.jpg" alt="TinyHand: a tiny hand for your Mac" />
 
@@ -32,6 +32,12 @@ Open `TinyHand.dmg`, drag TinyHand to Applications and allow **Accessibility** w
 
 While the pointer is on, a small toolbar at the bottom of the screen lets you pick one of
 36 hands or a laser dot, mute the tap sound, or exit.
+
+## Windows
+
+This fork includes a native Windows 10/11 (x64) port with the same hands, laser, drawing, shape snapping, tap sounds, toolbar and Settings. Custom hands and signed automatic updates are included.
+
+[Download TinyHand for Windows](https://github.com/Arisaya1/tinyhand/releases/latest), unzip it, then run `TinyHand.exe`. Click the tray icon or press **Ctrl+Alt+H** to turn the pointer on or off. Hold **Alt** to click through to the app underneath. See [windows/README.md](windows/README.md) for build instructions and security details.
 
 ## License
 

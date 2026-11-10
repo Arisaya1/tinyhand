@@ -75,7 +75,7 @@ th_shape_kind Ink::end(double now) {
             pts.push_back(th_point{p.X, p.Y});
         }
         Stroke *line = lastLineId_ ? find(lastLineId_) : nullptr;
-        if (line && now - lastLineTime_ < kArrowheadWindow) {
+        if (line && line->color == s->color && now - lastLineTime_ < kArrowheadWindow) {
             th_shape arrow;
             if (th_recognize_arrowhead(&line->shape, pts.data(), int(pts.size()), 1, &arrow) == TH_SHAPE_ARROW) {
                 markDirty(s->bounds);

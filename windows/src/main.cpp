@@ -1,5 +1,8 @@
 #include "app.h"
+#include "version.h"
+#ifdef TH_ENABLE_SELFTEST
 #include "selftest.h"
+#endif
 
 #include <commctrl.h>
 #include <shellapi.h>
@@ -62,10 +65,13 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
 
     int argc = 0;
     LPWSTR *argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+#ifdef TH_ENABLE_SELFTEST
     auto arg = [&](int i, const wchar_t *fallback) { return std::wstring(i < argc ? argv[i] : fallback); };
+#endif
     int code = -1;
     for (int i = 1; i < argc && code < 0; i++) {
         std::wstring a = argv[i];
+#ifdef TH_ENABLE_SELFTEST
         if (a == L"--render-test") {
             code = selftest::render(arg(i + 1, L"tinyhand-render.png"));
         } else if (a == L"--toolbar-test") {
@@ -78,8 +84,13 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
             code = selftest::welcome(arg(i + 1, L"tinyhand-welcome.png"));
         } else if (a == L"--e2e-test") {
             code = selftest::e2e(instance);
-        } else if (a == L"--version") {
-            selftest::print("TinyHand for Windows");
+        } else
+#endif
+        if (a == L"--version") {
+            DWORD written = 0;
+            HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
+            std::wstring text = std::wstring(L"TinyHand for Windows ") + TH_VERSION + L"\n";
+            WriteConsoleW(out, text.c_str(), DWORD(text.size()), &written, nullptr);
             code = 0;
         }
     }
@@ -87,6 +98,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
         code = run_app(instance);
     }
     LocalFree(argv);
+    hands::shutdown();
     Gdiplus::GdiplusShutdown(token);
     CoUninitialize();
     return code;

@@ -108,6 +108,14 @@ LRESULT WelcomeWindow::proc(UINT msg, WPARAM wp, LPARAM lp) {
     case WM_SETTINGCHANGE:
         render();
         break;
+    case WM_DPICHANGED: {
+        scale_ = float(HIWORD(wp)) / 96.0f;
+        const RECT *r = reinterpret_cast<const RECT *>(lp);
+        SetWindowPos(hwnd_, nullptr, r->left, r->top, r->right - r->left, r->bottom - r->top,
+                     SWP_NOZORDER | SWP_NOACTIVATE);
+        render();
+        return 0;
+    }
     default:
         break;
     }
@@ -131,10 +139,12 @@ void WelcomeWindow::paint(Gdiplus::Graphics &g, bool dark) {
     Gdiplus::Pen edge(dark ? th::white(0.1f) : th::black(0.08f), 1);
     g.DrawPath(&edge, &border);
 
-    static std::unique_ptr<Gdiplus::Bitmap> icon(th::load_png_resource(IDR_APP_PNG));
+    if (!icon_) {
+        icon_.reset(th::load_png_resource(IDR_APP_PNG));
+    }
     float y = card.Y + 57;
-    if (icon) {
-        g.DrawImage(icon.get(), Gdiplus::RectF(card.X + (kCardW - 76) / 2, y, 76, 76));
+    if (icon_) {
+        g.DrawImage(icon_.get(), Gdiplus::RectF(card.X + (kCardW - 76) / 2, y, 76, 76));
     }
     y += 76 + 16;
     auto fam = family();

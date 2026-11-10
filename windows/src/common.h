@@ -44,6 +44,7 @@ enum : UINT {
     WM_TH_TRAY,
     WM_TH_SHOW_SETTINGS,
     WM_TH_THUMBS,
+    WM_TH_UPDATE_INSTALL,
 };
 
 namespace th {
@@ -65,6 +66,7 @@ Gdiplus::Color rgba(uint32_t rgb, float alpha = 1.0f);
 Gdiplus::Color white(float alpha);
 Gdiplus::Color black(float alpha);
 
+bool png_size_allowed(uint64_t size);
 Gdiplus::Bitmap *load_png_file(const std::wstring &path);
 Gdiplus::Bitmap *load_png_resource(int id);
 Gdiplus::Bitmap *new_pargb(int width, int height);

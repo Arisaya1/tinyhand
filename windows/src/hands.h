@@ -29,7 +29,10 @@ Gdiplus::Bitmap *thumbnail(const std::wstring &style);
 Gdiplus::Bitmap *cached_thumbnail(const std::wstring &style);
 // Builds missing thumbnails on a worker thread, then posts msg to notify.
 void preload_thumbnails(const std::vector<std::wstring> &styles, HWND notify, UINT msg);
+// Joins workers and releases every cached GDI+ object before GdiplusShutdown.
+void shutdown();
 Gdiplus::Bitmap *resized(Gdiplus::Bitmap *image, int height);
 std::wstring asset_dir();
+void forget(const std::wstring &style);
 
 } // namespace hands

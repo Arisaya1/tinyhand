@@ -1,7 +1,10 @@
 #include "settings.h"
 
 #include "hands.h"
+#include "custom_hands.h"
+#include "custom_hand_ui.h"
 #include "sound.h"
+#include "update_controller.h"
 #include "version.h"
 
 #include <cwctype>
@@ -176,13 +179,22 @@ void SettingsWindow::create() {
     scale_ = th::dpi_scale_at(center);
     CreateWindowExW(0, kClass, L"TinyHand Settings", WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
                     CW_USEDEFAULT, CW_USEDEFAULT, 100, 100, nullptr, nullptr, instance_, this);
+    custom_hand_ui::install_drag_drop(hwnd_);
     scale_ = th::dpi_scale_window(hwnd_);
     resize();
 }
 
 void SettingsWindow::resize() {
     RECT r{0, 0, LONG(std::lround(kWidth * scale_)), LONG(std::lround(kHeight * scale_))};
-    AdjustWindowRectEx(&r, WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX, FALSE, 0);
+    DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
+    using AdjustForDpi = BOOL(WINAPI *)(RECT *, DWORD, BOOL, DWORD, UINT);
+    static auto adjustForDpi = reinterpret_cast<AdjustForDpi>(reinterpret_cast<void *>(
+        GetProcAddress(GetModuleHandleW(L"user32.dll"), "AdjustWindowRectExForDpi")));
+    if (adjustForDpi) {
+        adjustForDpi(&r, style, FALSE, 0, UINT(std::lround(scale_ * 96)));
+    } else {
+        AdjustWindowRectEx(&r, style, FALSE, 0);
+    }
     SetWindowPos(hwnd_, nullptr, 0, 0, r.right - r.left, r.bottom - r.top, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
@@ -212,6 +224,9 @@ void SettingsWindow::show(HINSTANCE instance, int section) {
     std::vector<std::wstring> all;
     for (const auto &s : kStyles) {
         all.push_back(s.id);
+    }
+    for (const auto &hand : custom_hands::all()) {
+        all.push_back(hand.id);
     }
     hands::preload_thumbnails(all, hwnd_, WM_TH_THUMBS);
     if (!IsWindowVisible(hwnd_)) {
@@ -255,6 +270,10 @@ LRESULT SettingsWindow::proc(UINT msg, WPARAM wp, LPARAM lp) {
         EndPaint(hwnd_, &ps);
         return 0;
     }
+    case WM_DROPFILES:
+        custom_hand_ui::handle_drop_files(hwnd_, reinterpret_cast<HDROP>(wp));
+        redraw();
+        return 0;
     case WM_ERASEBKGND:
         return 1;
     case WM_TH_THUMBS:
@@ -327,7 +346,6 @@ LRESULT SettingsWindow::proc(UINT msg, WPARAM wp, LPARAM lp) {
         const RECT *r = reinterpret_cast<const RECT *>(lp);
         SetWindowPos(hwnd_, nullptr, r->left, r->top, r->right - r->left, r->bottom - r->top,
                      SWP_NOZORDER | SWP_NOACTIVATE);
-        resize();
         redraw();
         return 0;
     }
@@ -568,12 +586,21 @@ void SettingsWindow::pageGeneral(Gdiplus::Graphics &g, float y) {
     }
     y = card(g, y, L"Clicking for real", clicking);
     y += 22;
-    card(g, y, L"Startup", {[&](float ry) {
-             return row(g, ry, L"Open TinyHand when you log in", L"", Kind::Switch, 38, 22, [](Widget &w) {
-                 w.on = prefs::launch_at_login();
-                 w.click = [] { prefs::set_launch_at_login(!prefs::launch_at_login()); };
-             });
-         }});
+    std::vector<std::function<float(float)>> startup;
+    startup.push_back([&](float ry) {
+        return row(g, ry, L"Open TinyHand when you log in", L"", Kind::Switch, 38, 22, [](Widget &w) {
+            w.on = prefs::launch_at_login();
+            w.click = [] { prefs::set_launch_at_login(!prefs::launch_at_login()); };
+        });
+    });
+    startup.push_back([&](float ry) {
+        return row(g, ry, L"Check for updates automatically", L"Signed Windows releases only", Kind::Switch, 38, 22,
+                   [](Widget &w) {
+                       w.on = updates::automatically_checks();
+                       w.click = [] { updates::set_automatically_checks(!updates::automatically_checks()); };
+                   });
+    });
+    card(g, y, L"Startup", startup);
 }
 
 void SettingsWindow::pagePointers(Gdiplus::Graphics &g, float y) {
@@ -646,16 +673,41 @@ void SettingsWindow::pagePointers(Gdiplus::Graphics &g, float y) {
         }
     }
 
+    if (!picking_) {
+        float bx = kX0 + 4;
+        auto button = [&](const wchar_t *label, std::function<void()> action) {
+            float bw = textWidth(g, label, Caption) + 2;
+            Widget &b = add(Kind::TextButton, Gdiplus::RectF(bx, y + 3, bw, 15));
+            b.text = label;
+            b.click = action;
+            bx += bw + 18;
+        };
+        button(L"Make your own…", [this] { custom_hand_ui::choose_file(hwnd_); });
+        button(L"Copy prompt", [] { custom_hand_ui::copy_prompt(); });
+        button(L"Open ChatGPT", [] { custom_hand_ui::open_chatgpt(); });
+        if (custom_hands::valid_id(prefs::get().pointerStyle)) {
+            button(L"Remove custom hand…", [this] { custom_hand_ui::remove_current(hwnd_); });
+        }
+        y += 22;
+    }
+
     if (picking_) {
+        std::vector<std::wstring> styles;
+        for (const auto &s : kStyles) {
+            styles.push_back(s.id);
+        }
+        for (const auto &hand : custom_hands::all()) {
+            styles.push_back(hand.id);
+        }
         const int cols = 8;
         const float cell = 56, cellH = 54;
-        int count = int(kStyles.size());
+        int count = int(styles.size());
         int rows = (count + cols - 1) / cols;
         float pw = cols * cell + 24, ph = float(rows) * cellH + 24;
         Gdiplus::RectF panel(kX0 + cw - pw, slotRow_.Y + slotRow_.Height + 8, pw, ph);
         add(Kind::Picker, panel);
         for (int k = 0; k < count; k++) {
-            std::wstring id = kStyles[size_t(k)].id;
+            std::wstring id = styles[size_t(k)];
             Widget &c = add(Kind::PickerCell, Gdiplus::RectF(panel.X + 12 + float(k % cols) * cell,
                                                              panel.Y + 12 + float(k / cols) * cellH, cell, cellH));
             c.text = id;
@@ -852,6 +904,13 @@ void SettingsWindow::pageAbout(Gdiplus::Graphics &g, float y) {
     }
     y = card(g, y, nullptr, rows);
     y += 22;
+    if (checkForUpdates) {
+        std::wstring check = L"Check for updates";
+        float cwButton = textWidth(g, check, Caption) + 2;
+        Widget &update = add(Kind::TextButton, Gdiplus::RectF(kX0 + 4, y, cwButton, 15));
+        update.text = check;
+        update.click = checkForUpdates;
+    }
     std::wstring label = L"Reset all settings…";
     float rw = textWidth(g, label, Caption) + 2;
     Widget &reset = add(Kind::TextButton, Gdiplus::RectF(kX0 + cw - 4 - rw, y, rw, 15));
@@ -1236,9 +1295,11 @@ void SettingsWindow::draw(Gdiplus::Graphics &g, const Widget &w, int index) {
                      w.selected ? 0.35f : 1.0f);
         return;
     case Kind::AppIcon: {
-        static std::unique_ptr<Gdiplus::Bitmap> icon(th::load_png_resource(IDR_APP_PNG));
-        if (icon) {
-            g.DrawImage(icon.get(), w.r);
+        if (!appIcon_) {
+            appIcon_.reset(th::load_png_resource(IDR_APP_PNG));
+        }
+        if (appIcon_) {
+            g.DrawImage(appIcon_.get(), w.r);
         }
         return;
     }

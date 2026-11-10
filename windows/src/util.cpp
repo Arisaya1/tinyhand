@@ -70,13 +70,27 @@ void log(const wchar_t *fmt, ...) {
     }
     char utf8[2400];
     int bytes = WideCharToMultiByte(CP_UTF8, 0, line, n, utf8, sizeof(utf8), nullptr, nullptr);
+    static SRWLOCK lock = SRWLOCK_INIT;
+    AcquireSRWLockExclusive(&lock);
     HANDLE f = CreateFileW(path.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS,
                            FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (f != INVALID_HANDLE_VALUE) {
+        LARGE_INTEGER size{};
+        if (GetFileSizeEx(f, &size) && size.QuadPart > 1024 * 1024) {
+            CloseHandle(f);
+            std::wstring previous = path + L".old";
+            MoveFileExW(previous.c_str(), nullptr, MOVEFILE_REPLACE_EXISTING);
+            MoveFileExW(path.c_str(), previous.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
+            f = CreateFileW(path.c_str(), FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, CREATE_ALWAYS,
+                            FILE_ATTRIBUTE_NORMAL, nullptr);
+        }
+    }
     if (f != INVALID_HANDLE_VALUE) {
         DWORD written = 0;
         WriteFile(f, utf8, DWORD(bytes), &written, nullptr);
         CloseHandle(f);
     }
+    ReleaseSRWLockExclusive(&lock);
 }
 
 bool apps_use_dark() {
@@ -151,8 +165,16 @@ static Gdiplus::Bitmap *decode(const void *data, DWORD size) {
     Gdiplus::Bitmap *decoded = Gdiplus::Bitmap::FromStream(stream);
     Gdiplus::Bitmap *copy = nullptr;
     if (decoded && decoded->GetLastStatus() == Gdiplus::Ok) {
-        int w = int(decoded->GetWidth());
-        int h = int(decoded->GetHeight());
+        UINT uw = decoded->GetWidth();
+        UINT uh = decoded->GetHeight();
+        uint64_t pixels = uint64_t(uw) * uint64_t(uh);
+        if (uw == 0 || uh == 0 || uw > 8192 || uh > 8192 || pixels > 32ull * 1024 * 1024) {
+            delete decoded;
+            stream->Release();
+            return nullptr;
+        }
+        int w = int(uw);
+        int h = int(uh);
         copy = new_pargb(w, h);
         if (copy) {
             Gdiplus::Graphics g(copy);
@@ -165,21 +187,38 @@ static Gdiplus::Bitmap *decode(const void *data, DWORD size) {
     return copy;
 }
 
+bool png_size_allowed(uint64_t size) {
+    constexpr uint64_t kMaxPngBytes = 32ull * 1024 * 1024;
+    return size > 0 && size <= kMaxPngBytes;
+}
+
 Gdiplus::Bitmap *load_png_file(const std::wstring &path) {
     HANDLE f = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
     if (f == INVALID_HANDLE_VALUE) {
         return nullptr;
     }
     LARGE_INTEGER size{};
-    GetFileSizeEx(f, &size);
-    std::vector<uint8_t> data(size_t(size.QuadPart));
-    DWORD read = 0;
-    BOOL ok = ReadFile(f, data.data(), DWORD(data.size()), &read, nullptr);
-    CloseHandle(f);
-    if (!ok || read != data.size()) {
+    if (!GetFileSizeEx(f, &size) || size.QuadPart < 0 || !png_size_allowed(uint64_t(size.QuadPart))) {
+        CloseHandle(f);
         return nullptr;
     }
-    return decode(data.data(), read);
+    try {
+        std::vector<uint8_t> data(size_t(size.QuadPart));
+        DWORD read = 0;
+        BOOL ok = ReadFile(f, data.data(), DWORD(data.size()), &read, nullptr);
+        CloseHandle(f);
+        if (!ok || read != data.size()) {
+            return nullptr;
+        }
+        try {
+            return decode(data.data(), read);
+        } catch (const std::bad_alloc &) {
+            return nullptr;
+        }
+    } catch (const std::bad_alloc &) {
+        CloseHandle(f);
+        return nullptr;
+    }
 }
 
 const void *resource_bytes(int id, DWORD *size) {

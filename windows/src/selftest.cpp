@@ -480,6 +480,7 @@ namespace {
 class Catcher {
 public:
     int clicks = 0;
+    int modifiedClicks = 0;
     HWND hwnd = nullptr;
 
     bool create(HINSTANCE instance, RECT r) {
@@ -505,6 +506,10 @@ private:
         auto *self = reinterpret_cast<Catcher *>(GetWindowLongPtrW(h, GWLP_USERDATA));
         if (self && (msg == WM_LBUTTONDOWN || msg == WM_RBUTTONDOWN)) {
             self->clicks++;
+            if ((GetAsyncKeyState(VK_MENU) & 0x8000) || (GetAsyncKeyState(VK_CONTROL) & 0x8000) ||
+                (GetAsyncKeyState(VK_SHIFT) & 0x8000)) {
+                self->modifiedClicks++;
+            }
         }
         return DefWindowProcW(h, msg, wp, lp);
     }
@@ -581,6 +586,23 @@ void drag(const Pts &pts) {
     pump(0.3);
 }
 
+void right_drag(const Pts &pts) {
+    move_to(pts[0]);
+    pump(0.06);
+    INPUT in{};
+    in.type = INPUT_MOUSE;
+    in.mi.dwFlags = MOUSEEVENTF_RIGHTDOWN;
+    SendInput(1, &in, sizeof(in));
+    pump(0.03);
+    for (const auto &p : pts) {
+        move_to(p);
+        pump(0.006);
+    }
+    in.mi.dwFlags = MOUSEEVENTF_RIGHTUP;
+    SendInput(1, &in, sizeof(in));
+    pump(0.3);
+}
+
 Pts offset(Pts pts, float dx, float dy) {
     for (auto &p : pts) {
         p.X += dx;
@@ -622,7 +644,12 @@ int e2e(HINSTANCE instance) {
     Gdiplus::PointF c(float(m.left + m.right) / 2, float(m.top + m.bottom) / 2 - 40);
     RECT target{LONG(c.X) - 300, LONG(c.Y) - 200, LONG(c.X) + 300, LONG(c.Y) + 200};
     Catcher catcher;
-    catcher.create(instance, target);
+    if (!catcher.create(instance, target)) {
+        print("FAIL catcher window creation: %lu", GetLastError());
+        app.shutdown();
+        return 3;
+    }
+    SetForegroundWindow(catcher.hwnd);
     pump(0.3);
 
     click(c);
@@ -662,6 +689,18 @@ int e2e(HINSTANCE instance) {
         check(name.c_str(), ok, detail);
     }
 
+    int nonLeftStrokes = o.strokeCount();
+    int nonLeftPresses = o.presses();
+    Pts nonLeft;
+    for (int i = 0; i <= 20; i++) {
+        nonLeft.emplace_back(c.X + 220 + float(i) * 2, c.Y - 170 + float(i));
+    }
+    right_drag(nonLeft);
+    snprintf(detail, sizeof(detail), "presses %d -> %d, strokes %d -> %d", nonLeftPresses, o.presses(),
+             nonLeftStrokes, o.strokeCount());
+    check("right drag taps once without drawing",
+          o.presses() == nonLeftPresses + 1 && o.strokeCount() == nonLeftStrokes, detail);
+
     Pts line;
     for (int i = 0; i <= 40; i++) {
         line.emplace_back(c.X - 220 + 11.0f * float(i), c.Y + 175 + (i % 3 == 0 ? 1.0f : 0.0f));
@@ -683,6 +722,7 @@ int e2e(HINSTANCE instance) {
           detail);
 
     before = catcher.clicks;
+    int modifiedBefore = catcher.modifiedClicks;
     key(VK_MENU, true);
     pump(0.05);
     click(c);
@@ -690,6 +730,8 @@ int e2e(HINSTANCE instance) {
     pump(0.1);
     snprintf(detail, sizeof(detail), "app clicks %d -> %d", before, catcher.clicks);
     check("Alt+click goes through for real", catcher.clicks == before + 1, detail);
+    check("forwarded click has no modifier", catcher.modifiedClicks == modifiedBefore);
+    check("Alt is not stuck after click", (GetAsyncKeyState(VK_MENU) & 0x8000) == 0);
 
     chord({VK_CONTROL, VK_MENU, 'X'});
     pump(0.2);

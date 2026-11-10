@@ -57,6 +57,7 @@ private:
     void setEscEnabled(bool enabled);
     void scanShell(double now);
     Gdiplus::PointF local(POINT p) const;
+    void forwardInteraction(WPARAM button, LPARAM point);
 
     HWND hwnd_ = nullptr;
     Toolbar *toolbar_ = nullptr;

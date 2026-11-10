@@ -11,6 +11,7 @@ constexpr UINT kBusyMs = 8;
 constexpr UINT kIdleMs = 50;
 constexpr UINT_PTR kTimerId = 1;
 constexpr int kEscHotkey = 1;
+constexpr ULONG_PTR kInjectedClick = 0x54484e44;
 
 // State shared with the mouse hook thread. The hook runs on its own thread
 // (like the macOS event tap) so a busy frame never delays the user's mouse.
@@ -20,13 +21,20 @@ struct HookState {
     bool active = false;
     int interactVk = 0;
     bool interactPress = false;
+    WORD interactActualVk = 0;
+    bool interactPhysicalDown = false;
+    bool interactRestore = false;
+    DWORD interactMouseData = 0;
     bool passingThrough = false;
     bool pressing = false;
+    bool leftPressing = false;
     bool idle = false;
     bool dragPosted = false;
     std::vector<RECT> passRects;
     std::vector<POINT> points;
     HHOOK hook = nullptr;
+    HHOOK keyboardHook = nullptr;
+    DWORD lastError = 0;
     HANDLE thread = nullptr;
     DWORD threadId = 0;
     HookState() { InitializeCriticalSection(&cs); }
@@ -38,6 +46,69 @@ struct Lock {
     Lock() { EnterCriticalSection(&hs.cs); }
     ~Lock() { LeaveCriticalSection(&hs.cs); }
 };
+
+WORD actual_modifier(int vk) {
+    if (vk == VK_MENU || vk == VK_CONTROL || vk == VK_SHIFT) {
+        int left = vk == VK_MENU ? VK_LMENU : vk == VK_CONTROL ? VK_LCONTROL : VK_LSHIFT;
+        int right = vk == VK_MENU ? VK_RMENU : vk == VK_CONTROL ? VK_RCONTROL : VK_RSHIFT;
+        if (GetAsyncKeyState(left) & 0x8000) {
+            return WORD(left);
+        }
+        if (GetAsyncKeyState(right) & 0x8000) {
+            return WORD(right);
+        }
+    }
+    return WORD(vk);
+}
+
+void key_input(WORD vk, bool down) {
+    INPUT in{};
+    in.type = INPUT_KEYBOARD;
+    in.ki.wVk = vk;
+    in.ki.dwFlags = down ? 0 : KEYEVENTF_KEYUP;
+    SendInput(1, &in, sizeof(in));
+}
+
+void mouse_input(WPARAM wp, const MSLLHOOKSTRUCT *m) {
+    DWORD flags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK;
+    switch (wp) {
+    case WM_LBUTTONDOWN: flags |= MOUSEEVENTF_LEFTDOWN; break;
+    case WM_LBUTTONUP: flags |= MOUSEEVENTF_LEFTUP; break;
+    case WM_RBUTTONDOWN: flags |= MOUSEEVENTF_RIGHTDOWN; break;
+    case WM_RBUTTONUP: flags |= MOUSEEVENTF_RIGHTUP; break;
+    case WM_MBUTTONDOWN: flags |= MOUSEEVENTF_MIDDLEDOWN; break;
+    case WM_MBUTTONUP: flags |= MOUSEEVENTF_MIDDLEUP; break;
+    case WM_XBUTTONDOWN: flags |= MOUSEEVENTF_XDOWN; break;
+    case WM_XBUTTONUP: flags |= MOUSEEVENTF_XUP; break;
+    default: return;
+    }
+    int vx = GetSystemMetrics(SM_XVIRTUALSCREEN), vy = GetSystemMetrics(SM_YVIRTUALSCREEN);
+    int vw = std::max(2, GetSystemMetrics(SM_CXVIRTUALSCREEN));
+    int vh = std::max(2, GetSystemMetrics(SM_CYVIRTUALSCREEN));
+    INPUT in{};
+    in.type = INPUT_MOUSE;
+    in.mi.dx = LONG(std::lround((float(m->pt.x) - float(vx)) * 65535.0f / float(vw - 1)));
+    in.mi.dy = LONG(std::lround((float(m->pt.y) - float(vy)) * 65535.0f / float(vh - 1)));
+    in.mi.mouseData = wp == WM_XBUTTONDOWN || wp == WM_XBUTTONUP ? m->mouseData : 0;
+    in.mi.dwFlags = flags;
+    in.mi.dwExtraInfo = kInjectedClick;
+    SendInput(1, &in, sizeof(in));
+}
+
+LRESULT CALLBACK keyboard_proc(int code, WPARAM wp, LPARAM lp) {
+    if (code == HC_ACTION) {
+        const auto *k = reinterpret_cast<const KBDLLHOOKSTRUCT *>(lp);
+        if (!(k->flags & LLKHF_INJECTED)) {
+            bool down = wp == WM_KEYDOWN || wp == WM_SYSKEYDOWN;
+            bool up = wp == WM_KEYUP || wp == WM_SYSKEYUP;
+            Lock lock;
+            if (k->vkCode == hs.interactActualVk && (down || up)) {
+                hs.interactPhysicalDown = down;
+            }
+        }
+    }
+    return CallNextHookEx(nullptr, code, wp, lp);
+}
 
 bool in_rects(const std::vector<RECT> &rects, POINT p) {
     for (const RECT &r : rects) {
@@ -53,17 +124,21 @@ LRESULT CALLBACK mouse_proc(int code, WPARAM wp, LPARAM lp) {
         return CallNextHookEx(nullptr, code, wp, lp);
     }
     const auto *m = reinterpret_cast<const MSLLHOOKSTRUCT *>(lp);
+    if (m->dwExtraInfo == kInjectedClick) {
+        return CallNextHookEx(nullptr, code, wp, lp);
+    }
     const bool down = wp == WM_LBUTTONDOWN || wp == WM_RBUTTONDOWN || wp == WM_MBUTTONDOWN || wp == WM_XBUTTONDOWN;
     const bool up = wp == WM_LBUTTONUP || wp == WM_RBUTTONUP || wp == WM_MBUTTONUP || wp == WM_XBUTTONUP;
     bool swallow = false;
     UINT post = 0;
     LPARAM postL = MAKELPARAM(m->pt.x, m->pt.y);
     HWND target;
+    WPARAM postW = 0;
     {
         Lock lock;
         target = hs.target;
         if (wp == WM_MOUSEMOVE) {
-            if (hs.active && hs.pressing) {
+            if (hs.active && hs.leftPressing) {
                 if (hs.points.size() < 16384) {
                     hs.points.push_back(m->pt);
                 }
@@ -79,10 +154,20 @@ LRESULT CALLBACK mouse_proc(int code, WPARAM wp, LPARAM lp) {
             if (down && !hs.interactPress && !hs.pressing && !hs.passingThrough && hs.interactVk &&
                 (GetAsyncKeyState(hs.interactVk) & 0x8000)) {
                 hs.interactPress = true;
+                hs.interactActualVk = actual_modifier(hs.interactVk);
+                hs.interactPhysicalDown = true;
+                hs.interactMouseData = m->mouseData;
+                swallow = true;
+                postW = wp;
                 post = WM_TH_INTERACT_DOWN;
             } else if (hs.interactPress) {
+                hs.interactMouseData = m->mouseData;
+                swallow = true;
+                postW = wp;
                 if (up) {
+                    hs.interactRestore = hs.interactPhysicalDown;
                     hs.interactPress = false;
+                    hs.interactPhysicalDown = false;
                     post = WM_TH_INTERACT_UP;
                 }
             } else {
@@ -98,6 +183,7 @@ LRESULT CALLBACK mouse_proc(int code, WPARAM wp, LPARAM lp) {
                     swallow = true;
                     if (!hs.pressing) {
                         hs.pressing = true;
+                        hs.leftPressing = wp == WM_LBUTTONDOWN;
                         hs.points.clear();
                         hs.points.push_back(m->pt);
                         post = WM_TH_MOUSEDOWN;
@@ -106,6 +192,7 @@ LRESULT CALLBACK mouse_proc(int code, WPARAM wp, LPARAM lp) {
                     swallow = true;
                     if (hs.pressing) {
                         hs.pressing = false;
+                        hs.leftPressing = false;
                         post = WM_TH_MOUSEUP;
                     }
                 }
@@ -113,7 +200,7 @@ LRESULT CALLBACK mouse_proc(int code, WPARAM wp, LPARAM lp) {
         }
     }
     if (post && target) {
-        PostMessageW(target, post, 0, postL);
+        PostMessageW(target, post, postW, postL);
     }
     return swallow ? 1 : CallNextHookEx(nullptr, code, wp, lp);
 }
@@ -123,19 +210,27 @@ DWORD WINAPI hook_thread(LPVOID ready) {
     PeekMessageW(&msg, nullptr, 0, 0, PM_NOREMOVE);
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
     HHOOK hook = SetWindowsHookExW(WH_MOUSE_LL, mouse_proc, GetModuleHandleW(nullptr), 0);
+    HHOOK keyboard = hook ? SetWindowsHookExW(WH_KEYBOARD_LL, keyboard_proc, GetModuleHandleW(nullptr), 0) : nullptr;
     {
         Lock lock;
-        hs.hook = hook;
+        hs.hook = keyboard ? hook : nullptr;
+        hs.keyboardHook = keyboard;
+        hs.lastError = keyboard ? 0 : GetLastError();
     }
     SetEvent(static_cast<HANDLE>(ready));
-    if (!hook) {
+    if (!keyboard) {
+        if (hook) {
+            UnhookWindowsHookEx(hook);
+        }
         return 1;
     }
     while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
     }
     UnhookWindowsHookEx(hook);
+    UnhookWindowsHookEx(keyboard);
     Lock lock;
     hs.hook = nullptr;
+    hs.keyboardHook = nullptr;
     return 0;
 }
 
@@ -171,12 +266,24 @@ void hook_remove() {
 }
 
 void hook_set_active(bool active) {
-    Lock lock;
-    hs.active = active;
-    hs.interactPress = false;
-    hs.passingThrough = false;
-    hs.pressing = false;
-    hs.points.clear();
+    WORD restoreVk = 0;
+    {
+        Lock lock;
+        if (hs.interactPress && hs.interactPhysicalDown) {
+            restoreVk = hs.interactActualVk;
+        }
+        hs.active = active;
+        hs.interactPress = false;
+        hs.interactPhysicalDown = false;
+        hs.interactActualVk = 0;
+        hs.passingThrough = false;
+        hs.pressing = false;
+        hs.leftPressing = false;
+        hs.points.clear();
+    }
+    if (restoreVk) {
+        key_input(restoreVk, true);
+    }
 }
 
 RECT union_rect(const RECT &a, const RECT &b) {
@@ -321,6 +428,30 @@ LRESULT CALLBACK Overlay::WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     return self ? self->proc(msg, wp, lp) : DefWindowProcW(hwnd, msg, wp, lp);
 }
 
+void Overlay::forwardInteraction(WPARAM button, LPARAM point) {
+    WORD vk = 0;
+    DWORD mouseData = 0;
+    bool restore = false;
+    {
+        Lock lock;
+        vk = hs.interactActualVk;
+        mouseData = hs.interactMouseData;
+        restore = hs.interactRestore;
+    }
+    if (!vk) {
+        return;
+    }
+    key_input(vk, false);
+    MSLLHOOKSTRUCT m{};
+    m.pt = POINT{GET_X_LPARAM(point), GET_Y_LPARAM(point)};
+    m.mouseData = mouseData;
+    mouse_input(button, &m);
+    bool up = button == WM_LBUTTONUP || button == WM_RBUTTONUP || button == WM_MBUTTONUP || button == WM_XBUTTONUP;
+    if (up && restore) {
+        key_input(vk, true);
+    }
+}
+
 LRESULT Overlay::proc(UINT msg, WPARAM wp, LPARAM lp) {
     double t = th::now();
     switch (msg) {
@@ -365,10 +496,12 @@ LRESULT Overlay::proc(UINT msg, WPARAM wp, LPARAM lp) {
             in[1].ki.dwFlags = KEYEVENTF_KEYUP;
             SendInput(2, in, sizeof(INPUT));
         }
+        forwardInteraction(wp, lp);
         lastButtonEvent_ = t;
         wake();
         return 0;
     case WM_TH_INTERACT_UP:
+        forwardInteraction(wp, lp);
         arm_.held = false;
         lastButtonEvent_ = t;
         wake();
@@ -484,6 +617,17 @@ bool Overlay::activate() {
         return hookInstalled();
     }
     bool installed = hook_install();
+    if (!installed) {
+        DWORD error = hs.lastError;
+        th::log(L"activation failed: mouse hook error %lu", error);
+        wchar_t message[256];
+        _snwprintf(message, std::size(message) - 1,
+                   L"TinyHand couldn't start its mouse hook (error %lu). No clicks have been blocked. Try again, or restart TinyHand.",
+                   error);
+        message[std::size(message) - 1] = 0;
+        MessageBoxW(nullptr, message, L"TinyHand", MB_OK | MB_ICONERROR | MB_TOPMOST);
+        return false;
+    }
     active_ = true;
     monitor_ = nullptr;
     lastTick_ = 0;
@@ -652,8 +796,8 @@ void Overlay::updateZones(POINT mouse, double now) {
     setEscEnabled(menuRects_.empty() && !ownMenuOpen_);
 
     if (normal != normalCursor_) {
-        th::log(normal ? L"real cursor (%ls) at %ld,%ld" : L"pointer back%ls at %ld,%ld",
-                normal ? (interacting ? L"interact key" : L"menu or taskbar") : L"", mouse.x, mouse.y);
+        th::log(normal ? L"real cursor (%ls)" : L"pointer back%ls",
+                normal ? (interacting ? L"interact key" : L"menu or taskbar") : L"");
         normalCursor_ = normal;
         arm_.hidden = normal;
         if (normal) {

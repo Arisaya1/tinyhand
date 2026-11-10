@@ -3,7 +3,7 @@
 A native Win32 port of TinyHand: the same tiny hand on a stick, the same 36 hands and laser dot,
 the same drawing and tap sounds, now on Windows 10 and 11 (x64).
 
-It is a single static `TinyHand.exe` (no installer, no runtime to install) plus the `assets` folder
+It is a static `TinyHand.exe` (no runtime to install), a small `TinyHandUpdater.exe`, and an `assets` folder
 with the hand pictures.
 
 ## Use
@@ -52,16 +52,16 @@ straight from the build folder.
 
 ## Checks
 
-The exe has the same kind of self-test switches as the macOS app. They work on Windows and under Wine:
+The separate test executable is `TinyHand-test.exe`; its switches are compiled out of the production app:
 
 | | |
 |---|---|
-| `TinyHand.exe --render-test out.png` | Draws every shape through the snapper and all 37 pointers into one picture; exit code is the number of misses |
-| `TinyHand.exe --toolbar-test out.png` | Renders the toolbar, the first-run hint and the ink tray |
-| `TinyHand.exe --settings-test out.png` | Renders every Settings page (plus the pointer picker and dark mode) to `out-<page>.png` |
-| `TinyHand.exe --settings-ui-test` | Clicks and drags through Settings with window messages and checks each control changes its setting. The real mouse does not move |
-| `TinyHand.exe --welcome-test out.png` | Renders the first-run card, light and dark |
-| `TinyHand.exe --e2e-test` | Drives real mouse and keyboard input through the hook: taps, drawing and snapping, two-stroke arrows, Alt-click, shortcuts and Esc. It moves the mouse for a few seconds |
+| `TinyHand-test.exe --render-test out.png` | Draws every shape through the snapper and all 37 pointers into one picture; exit code is the number of misses |
+| `TinyHand-test.exe --toolbar-test out.png` | Renders the toolbar, the first-run hint and the ink tray |
+| `TinyHand-test.exe --settings-test out.png` | Renders every Settings page (plus the pointer picker and dark mode) to `out-<page>.png` |
+| `TinyHand-test.exe --settings-ui-test` | Clicks and drags through Settings with window messages and checks each control changes its setting. The real mouse does not move |
+| `TinyHand-test.exe --welcome-test out.png` | Renders the first-run card, light and dark |
+| `TinyHand-test.exe --e2e-test` | Drives real mouse and keyboard input through the hook: taps, drawing and snapping, two-stroke arrows, Alt-click, shortcuts and Esc. It moves the mouse for a few seconds |
 | `make -C windows test` | Builds `shape_test.exe`, the shared shape recognizer test |
 
 To try it on a Mac with [Wine](https://www.winehq.org/) (64-bit Wine 9 or later):
@@ -90,4 +90,6 @@ wine windows/build/TinyHand.exe
 
 Shape snapping is shared: both apps compile the same C recognizer in `Sources/ShapeKit`.
 
-Not ported yet: making your own hand from a picture, and automatic updates.
+Custom hands can be imported from the Pointers settings page or by dropping a PNG onto Settings. The prompt tools open ChatGPT or copy a prompt. Custom images are validated and size-limited before allocation.
+
+Updates use an ECDSA P-256-signed manifest from this fork's GitHub releases. The downloaded ZIP must match its signed size and SHA-256 and pass strict member validation before the updater replaces files. Startup registration is opt-in.
